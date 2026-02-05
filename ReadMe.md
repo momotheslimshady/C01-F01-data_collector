@@ -1,4 +1,4 @@
-# Reinraum Sensor Ingestion (`data_ingestion_sum.py`)
+# Reinraum Sensor Ingestion (`data_collector.py`)
 
 Python script for reading multiple environmental sensors on a Raspberry Pi (I²C + HM3301) and publishing measurements to MQTT, including Zigbee2MQTT device state aggregation with age/status semantics.
 
