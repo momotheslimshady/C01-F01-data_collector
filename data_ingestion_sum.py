@@ -17,9 +17,13 @@ import paho.mqtt.client as mqtt
 # KONFIGURATION
 # -------------------------------------------------
 BUS_D18_ID = 3                      # HM3301 Software-I2C
-MQTT_BROKER = "127.0.0.1"
+MQTT_BROKER = "192.168.178.50"
 MQTT_PORT = 1883
 Z2M_PREFIX = "zigbee2mqtt"
+MQTT_PUBLISH_PREFIX = "reinraum1"
+
+# MQTT Client (global für Publishing)
+mqtt_client = None
 
 # >>> ZIGBEE FRIENDLY NAMES (aus eurer Web-UI) <<<
 ZIGBEE_DEVICES = [
@@ -79,11 +83,21 @@ def on_mqtt_message(client, userdata, msg):
         pass
 
 def start_mqtt():
-    client = mqtt.Client()
-    client.on_connect = on_mqtt_connect
-    client.on_message = on_mqtt_message
-    client.connect(MQTT_BROKER, MQTT_PORT, 60)
-    threading.Thread(target=client.loop_forever, daemon=True).start()
+    global mqtt_client
+    mqtt_client = mqtt.Client()
+    mqtt_client.on_connect = on_mqtt_connect
+    mqtt_client.on_message = on_mqtt_message
+    mqtt_client.connect(MQTT_BROKER, MQTT_PORT, 60)
+    threading.Thread(target=mqtt_client.loop_forever, daemon=True).start()
+    time.sleep(1)  # Warte auf Verbindung
+
+def publish_measurement(topic, value, retain=False):
+    """Publishe einen Messwert auf MQTT"""
+    if mqtt_client and mqtt_client.is_connected():
+        full_topic = f"{MQTT_PUBLISH_PREFIX}/{topic}"
+        mqtt_client.publish(full_topic, json.dumps(value), retain=retain)
+        return True
+    return False
 
 # -------------------------------------------------
 # ZIGBEE FORMATIERUNG
@@ -187,27 +201,46 @@ def main():
     try:
         while True:
             outputs = []
+            timestamp = int(time.time() * 1000)  # Millisekunden
 
             if lps:
-                outputs.append(f"Temp: {lps.temperature:.1f}°C")
-                outputs.append(f"Druck: {lps.pressure:.1f}hPa")
+                temp = lps.temperature
+                pressure = lps.pressure
+                outputs.append(f"Temp: {temp:.1f}°C")
+                outputs.append(f"Druck: {pressure:.1f}hPa")
+                # Publish zu MQTT
+                publish_measurement("lps22/temperature", {"value": round(temp, 1), "unit": "°C", "timestamp": timestamp})
+                publish_measurement("lps22/pressure", {"value": round(pressure, 1), "unit": "hPa", "timestamp": timestamp})
 
             if sgp:
                 try:
-                    outputs.append(f"eCO2: {sgp.eCO2}ppm")
-                    outputs.append(f"VOC: {sgp.TVOC}ppb")
+                    eco2 = sgp.eCO2
+                    tvoc = sgp.TVOC
+                    outputs.append(f"eCO2: {eco2}ppm")
+                    outputs.append(f"VOC: {tvoc}ppb")
+                    # Publish zu MQTT
+                    publish_measurement("sgp30/eco2", {"value": eco2, "unit": "ppm", "timestamp": timestamp})
+                    publish_measurement("sgp30/tvoc", {"value": tvoc, "unit": "ppb", "timestamp": timestamp})
                 except:
                     outputs.append("SGP30: busy")
 
             if fs3000:
                 try:
-                    outputs.append(f"Wind: {fs3000.read_meters_per_second():.2f}m/s")
+                    wind = fs3000.read_meters_per_second()
+                    outputs.append(f"Wind: {wind:.2f}m/s")
+                    # Publish zu MQTT
+                    publish_measurement("fs3000/wind_speed", {"value": round(wind, 2), "unit": "m/s", "timestamp": timestamp})
                 except:
                     outputs.append("Wind: err")
 
             if hm3301.connected:
                 _, pm25, _ = hm3301.read()
-                outputs.append(f"PM2.5: {pm25}µg/m³" if pm25 else "PM2.5: err")
+                if pm25:
+                    outputs.append(f"PM2.5: {pm25}µg/m³")
+                    # Publish zu MQTT
+                    publish_measurement("hm3301/pm2_5", {"value": pm25, "unit": "µg/m³", "timestamp": timestamp})
+                else:
+                    outputs.append("PM2.5: err")
 
             outputs.extend(format_zigbee_outputs())
 
